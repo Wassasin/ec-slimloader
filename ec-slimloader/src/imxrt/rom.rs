@@ -5,7 +5,7 @@ use core::{
 
 use mimxrt685s_pac::interrupt;
 
-use crate::{error, warn};
+use crate::{error, info, warn};
 
 #[repr(C)]
 #[derive(Default, Debug)]
@@ -246,39 +246,13 @@ pub fn skboot_authenticate(start: *const u32, max_image_length: u32) -> Result<(
         },
     };
 
-    unsafe {
-        let nvic = &*cortex_m::peripheral::NVIC::PTR;
-
-        defmt::info!("ICER: {}", nvic.icer.each_ref().map(|reg| reg.read()));
-        defmt::info!("ICPR: {}", nvic.icpr.each_ref().map(|reg| reg.read()));
-
-        // Disable all configurable interrupts.
-        for clear_enable in &nvic.icer {
-            clear_enable.write(u32::MAX);
-        }
-    }
-
-    for addr in 0x0_0000..=0x1_BFFF {
-        let addr = addr as *mut u32;
-        unsafe { addr.write_volatile(0) };
-    }
-
-    unsafe {
-        let rstctl0 = mimxrt685s_pac::Rstctl0::steal();
-        rstctl0
-            .prstctl0_clr()
-            .write(|w| w.hashcrypt().set_bit().flexspi_otfad().set_bit());
-        // cortex_m::asm::delay(10_000_000);
-    }
-
-    fence(Ordering::SeqCst);
-
     let status = unsafe { (api_table().iap_driver.init)(&mut session_ref, &options) };
     if status != KbStatus::Success as u32 {
         error!("kinit failed with {:?}", status);
         return Err(AuthenticateError::Fail);
     }
 
+    // Ensure that everything before this function has been performed.
     fence(Ordering::SeqCst);
 
     // Placeholder value that will be mutated by skboot_authenticate.
@@ -286,10 +260,11 @@ pub fn skboot_authenticate(start: *const u32, max_image_length: u32) -> Result<(
 
     let result = unsafe { (api_table().skboot.authenticate)(start, &mut is_sign_verified) };
 
+    // Ensure that skboot_authenticate has been executed before doing anything else.
     fence(Ordering::SeqCst);
 
     if cortex_m::peripheral::NVIC::is_enabled(mimxrt685s_pac::Interrupt::HASHCRYPT) {
-        warn!("ROM API kept HASHCRYPT unmasked...");
+        // ROM API kept HASHCRYPT unmasked...
         cortex_m::peripheral::NVIC::mask(mimxrt685s_pac::Interrupt::HASHCRYPT);
     }
 

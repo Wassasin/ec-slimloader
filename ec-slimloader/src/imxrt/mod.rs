@@ -4,6 +4,7 @@ use core::sync::atomic::{fence, Ordering};
 use ec_slimloader_descriptors::journal::flash::FlashJournal;
 use ec_slimloader_descriptors::journal::state::Slot;
 use ec_slimloader_descriptors::AppImageDescriptor;
+use embassy_imxrt::clocks::MainClkConfig;
 use embassy_imxrt::flexspi::embedded_storage::FlexSpiNorStorage;
 use embassy_imxrt::flexspi::nor_flash::FlexSpiNorFlash;
 use embassy_imxrt::gpio::{DriveMode, DriveStrength, Level, Output, SlewRate};
@@ -77,74 +78,76 @@ impl IVT {
     }
 }
 
-struct Leds {
-    pub red: Output<'static>,
-    pub green: Output<'static>,
-    pub blue: Output<'static>,
-}
+// struct Leds {
+//     pub red: Output<'static>,
+//     pub green: Output<'static>,
+//     pub blue: Output<'static>,
+// }
 
 struct Imxrt {
-    journal: FlashJournal<Partition<'static, ExternalStorage, RW>>,
-    leds: Leds,
+    // journal: FlashJournal<Partition<'static, ExternalStorage, RW>>,
+    // leds: Leds,
 }
 
 impl Board for Imxrt {
     async fn init() -> Self {
         let mut config: embassy_imxrt::config::Config = Default::default();
-        config.clocks.main_clk.freq = 50_000_000.into();
+        // config.clocks.main_clk.src = embassy_imxrt::clocks::MainClkSrc::FFRO;
         let p = embassy_imxrt::init(config);
 
-        let ext_flash = match unsafe { FlexSpiNorFlash::with_probed_config(p.FLEXSPI, 2, 2) } {
-            Ok(ext_flash) => ext_flash,
-            Err(e) => panic!("Failed to initialize FlexSPI peripheral: {:?}", e),
-        };
+        // let ext_flash = match unsafe { FlexSpiNorFlash::with_probed_config(p.FLEXSPI, 2, 2) } {
+        //     Ok(ext_flash) => ext_flash,
+        //     Err(e) => panic!("Failed to initialize FlexSPI peripheral: {:?}", e),
+        // };
 
-        let ext_flash = match unsafe { FlexSpiNorStorage::<2, 2, 4096>::new(ext_flash) } {
-            Ok(ext_flash) => ext_flash,
-            Err(e) => panic!("Failed to wrap FlexSPI flash in embedded_storage adaptor: {:?}", e),
-        };
+        // let ext_flash = match unsafe { FlexSpiNorStorage::<2, 2, 4096>::new(ext_flash) } {
+        //     Ok(ext_flash) => ext_flash,
+        //     Err(e) => panic!("Failed to wrap FlexSPI flash in embedded_storage adaptor: {:?}", e),
+        // };
 
-        static EXT_FLASH: StaticCell<PartitionManager<ExternalStorage, NoopRawMutex>> = StaticCell::new();
-        let ext_flash_manager =
-            EXT_FLASH.init_with(|| PartitionManager::<_, NoopRawMutex>::new(AsyncWrapper(ext_flash)));
+        // static EXT_FLASH: StaticCell<PartitionManager<ExternalStorage, NoopRawMutex>> = StaticCell::new();
+        // let ext_flash_manager =
+        //     EXT_FLASH.init_with(|| PartitionManager::<_, NoopRawMutex>::new(AsyncWrapper(ext_flash)));
 
-        let ExternalStorageMap { bl_state } = ext_flash_manager.map(ExternalStorageConfig::new());
+        // let ExternalStorageMap { bl_state } = ext_flash_manager.map(ExternalStorageConfig::new());
 
-        let journal = match FlashJournal::new::<{ crate::JOURNAL_BUFFER_SIZE }>(bl_state).await {
-            Ok(journal) => journal,
-            Err(e) => panic!("Failed to initialize the flash state journal: {:?}", e),
-        };
+        // let journal = match FlashJournal::new::<{ crate::JOURNAL_BUFFER_SIZE }>(bl_state).await {
+        //     Ok(journal) => journal,
+        //     Err(e) => panic!("Failed to initialize the flash state journal: {:?}", e),
+        // };
 
-        let leds = Leds {
-            blue: Output::new(
-                p.PIO0_26,
-                Level::Low,
-                DriveMode::PushPull,
-                DriveStrength::Normal,
-                SlewRate::Standard,
-            ),
-            red: Output::new(
-                p.PIO0_31,
-                Level::Low,
-                DriveMode::PushPull,
-                DriveStrength::Normal,
-                SlewRate::Standard,
-            ),
-            green: Output::new(
-                p.PIO0_14,
-                Level::Low,
-                DriveMode::PushPull,
-                DriveStrength::Normal,
-                SlewRate::Standard,
-            ),
-        };
+        // let leds = Leds {
+        //     blue: Output::new(
+        //         p.PIO0_26,
+        //         Level::Low,
+        //         DriveMode::PushPull,
+        //         DriveStrength::Normal,
+        //         SlewRate::Standard,
+        //     ),
+        //     red: Output::new(
+        //         p.PIO0_31,
+        //         Level::Low,
+        //         DriveMode::PushPull,
+        //         DriveStrength::Normal,
+        //         SlewRate::Standard,
+        //     ),
+        //     green: Output::new(
+        //         p.PIO0_14,
+        //         Level::Low,
+        //         DriveMode::PushPull,
+        //         DriveStrength::Normal,
+        //         SlewRate::Standard,
+        //     ),
+        // };
 
-        Self { journal, leds }
+        // Self { journal, leds }
+
+        Self {}
     }
 
-    fn journal(&mut self) -> &mut FlashJournal<impl NorFlash> {
-        &mut self.journal
-    }
+    // fn journal(&mut self) -> &mut FlashJournal<impl NorFlash> {
+    //     &mut self.journal
+    // }
 
     async fn check_and_boot(&mut self, slot: &Slot) -> BootError {
         let descriptor = match DESCRIPTOR_SLOTS.get(u8::from(*slot) as usize) {
@@ -207,24 +210,24 @@ impl Board for Imxrt {
             (ram_ivt, target_data_ptr)
         };
 
-        self.leds.blue.set_high();
+        // self.leds.blue.set_high();
 
         info!("Starting authenticate");
 
         let slice = unsafe { core::slice::from_raw_parts(target_data_ptr as *const u8, ram_ivt.image_len) };
+        let mut result = heapless::string::String::<100>::new();
 
         let mut good = 0;
         let mut bad = 0;
-        for _ in 0..100 {
-            let digest = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(slice);
-            info!("CRC32: {:x}", digest);
-
+        for i in 0..100 {
             // Call the ROM API to ensure that the image is signed and not broken or tampered with.
             match rom::skboot_authenticate(0x800_D000 as *const u32, ram_ivt.image_len as u32) {
                 Ok(()) => {
+                    result.push('-');
                     good += 1;
                 }
                 Err(e) => {
+                    result.push('F');
                     warn!("Failed to authenticate {:?}", e);
                     // return BootError::Authenticate;
                     bad += 1;
@@ -232,11 +235,16 @@ impl Board for Imxrt {
             }
         }
 
-        if bad > 0 {
-            self.leds.red.set_high();
-        } else {
-            self.leds.green.set_high();
-        }
+        defmt::info!("{}", result.as_str());
+
+        // if bad > 0 {
+        //     self.leds.red.set_high();
+        // } else {
+        //     self.leds.green.set_high();
+        // }
+
+        info!("Good: {}", good);
+        info!("Bad: {}", bad);
 
         info!("Booting into application...");
 

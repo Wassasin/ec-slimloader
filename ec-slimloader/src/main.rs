@@ -32,7 +32,7 @@ trait Board {
     async fn init() -> Self;
 
     /// Give a mutable reference to the [FlashJournal].
-    fn journal(&mut self) -> &mut FlashJournal<impl NorFlash>;
+    // fn journal(&mut self) -> &mut FlashJournal<impl NorFlash>;
 
     /// Check the application image for integrity, and try to boot.
     ///
@@ -76,14 +76,14 @@ enum BootIntent {
 }
 
 /// Set a new valid [State] as the latest in the [FlashJournal].
-async fn set_status<B: Board>(board: &mut B, state: &mut State, status: Status) {
-    *state = state.with_status(status);
-    if let Err(_e) = board.journal().set::<JOURNAL_BUFFER_SIZE>(state).await {
-        panic!("Failed to update state"); // TODO print e, but requirements for defmt are in the way.
-    }
+// async fn set_status<B: Board>(board: &mut B, state: &mut State, status: Status) {
+//     *state = state.with_status(status);
+//     if let Err(_e) = board.journal().set::<JOURNAL_BUFFER_SIZE>(state).await {
+//         panic!("Failed to update state"); // TODO print e, but requirements for defmt are in the way.
+//     }
 
-    debug!("Stored new state in journal: {}", state);
-}
+//     debug!("Stored new state in journal: {}", state);
+// }
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
@@ -99,7 +99,8 @@ async fn main(_spawner: Spawner) -> ! {
     //     board.abort()
     // }
 
-    let state = board.journal().get();
+    // let state = board.journal().get();
+    let state: Option<&State> = None;
 
     // Fetch state or set initial state.
     let mut state: State = match state {
@@ -121,14 +122,14 @@ async fn main(_spawner: Spawner) -> ! {
     let intent = match state.status() {
         Status::Initial => {
             // Mark the status to [Attempting], so that the app can mark the status to [Confirmed].
-            set_status(&mut board, &mut state, Status::Attempting).await;
+            // set_status(&mut board, &mut state, Status::Attempting).await;
             BootIntent::Target
         }
         Status::Attempting => {
             // When the bootloader starts with the state [Attempting],
             // it implies that an attempt was made to start the application in the slot,
             // but the application failed to mark the slot as [Confirmed].
-            set_status(&mut board, &mut state, Status::Failed).await;
+            // set_status(&mut board, &mut state, Status::Failed).await;
             BootIntent::Backup
         }
         Status::Failed => BootIntent::Backup,
@@ -145,10 +146,10 @@ async fn main(_spawner: Spawner) -> ! {
     let error = board.check_and_boot(&slot).await; // If this function returns, it implies that the boot has failed.
     warn!("Failed to boot {:?} in {:?} because {:?}", intent, slot, error);
 
-    // Mark our state as [Failed] if it was not set to be so already.
-    if state.status() != Status::Failed {
-        set_status(&mut board, &mut state, Status::Failed).await;
-    }
+    // // Mark our state as [Failed] if it was not set to be so already.
+    // if state.status() != Status::Failed {
+    //     set_status(&mut board, &mut state, Status::Failed).await;
+    // }
 
     if slot != state.backup() {
         // There exists a separate backup slot.
