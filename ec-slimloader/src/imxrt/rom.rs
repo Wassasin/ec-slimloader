@@ -268,7 +268,7 @@ pub fn skboot_authenticate(start: *const u32, max_image_length: u32) -> Result<(
         rstctl0
             .prstctl0_clr()
             .write(|w| w.hashcrypt().set_bit().flexspi_otfad().set_bit());
-        cortex_m::asm::delay(10_000_000);
+        // cortex_m::asm::delay(10_000_000);
     }
 
     fence(Ordering::SeqCst);

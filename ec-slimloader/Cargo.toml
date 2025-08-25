@@ -38,10 +38,7 @@ default = ["mimxrt685s-evk"]
 ec-slimloader-descriptors = { path = "../ec-slimloader-descriptors", default-features = false }
 
 mimxrt600-fcb = { version = "0.2.2", optional = true }
-mimxrt685s-pac = { version = "0.4.0", features = [
-    "rt",
-    "debug",
-], optional = true }
+mimxrt685s-pac = { version = "0.4.0", features = ["debug"], optional = true }
 embassy-imxrt = { git = "https://github.com/Wassasin/embassy-imxrt.git", branch = "new-flexspi-driver", default-features = false, optional = true }
 embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
     "arch-cortex-m",
@@ -57,7 +54,7 @@ cortex-m = { version = "0.7.7", features = [
     "inline-asm",
     "critical-section-single-core",
 ] }
-cortex-m-rt = { version = "0.7.3", features = ["zero-init-ram"] }
+cortex-m-rt = { version = "0.7.5", features = ["zero-init-ram"] }
 panic-probe = "*"
 
 partition-manager = { git = "https://github.com/OpenDevicePartnership/embedded-services.git", features = [

@@ -6,6 +6,7 @@ use ec_slimloader_descriptors::journal::state::Slot;
 use ec_slimloader_descriptors::AppImageDescriptor;
 use embassy_imxrt::flexspi::embedded_storage::FlexSpiNorStorage;
 use embassy_imxrt::flexspi::nor_flash::FlexSpiNorFlash;
+use embassy_imxrt::gpio::{DriveMode, DriveStrength, Level, Output, SlewRate};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embedded_storage_async::nor_flash::NorFlash;
 use partition_manager::{Partition, PartitionManager, RW};
@@ -76,8 +77,15 @@ impl IVT {
     }
 }
 
+struct Leds {
+    pub red: Output<'static>,
+    pub green: Output<'static>,
+    pub blue: Output<'static>,
+}
+
 struct Imxrt {
     journal: FlashJournal<Partition<'static, ExternalStorage, RW>>,
+    leds: Leds,
 }
 
 impl Board for Imxrt {
@@ -107,7 +115,31 @@ impl Board for Imxrt {
             Err(e) => panic!("Failed to initialize the flash state journal: {:?}", e),
         };
 
-        Self { journal }
+        let leds = Leds {
+            blue: Output::new(
+                p.PIO0_26,
+                Level::Low,
+                DriveMode::PushPull,
+                DriveStrength::Normal,
+                SlewRate::Standard,
+            ),
+            red: Output::new(
+                p.PIO0_31,
+                Level::Low,
+                DriveMode::PushPull,
+                DriveStrength::Normal,
+                SlewRate::Standard,
+            ),
+            green: Output::new(
+                p.PIO0_14,
+                Level::Low,
+                DriveMode::PushPull,
+                DriveStrength::Normal,
+                SlewRate::Standard,
+            ),
+        };
+
+        Self { journal, leds }
     }
 
     fn journal(&mut self) -> &mut FlashJournal<impl NorFlash> {
@@ -175,22 +207,35 @@ impl Board for Imxrt {
             (ram_ivt, target_data_ptr)
         };
 
+        self.leds.blue.set_high();
+
         info!("Starting authenticate");
 
         let slice = unsafe { core::slice::from_raw_parts(target_data_ptr as *const u8, ram_ivt.image_len) };
 
-        for _ in 0..50 {
+        let mut good = 0;
+        let mut bad = 0;
+        for _ in 0..100 {
             let digest = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(slice);
             info!("CRC32: {:x}", digest);
 
             // Call the ROM API to ensure that the image is signed and not broken or tampered with.
-            match rom::skboot_authenticate(target_data_ptr, ram_ivt.image_len as u32) {
-                Ok(()) => {}
+            match rom::skboot_authenticate(0x800_D000 as *const u32, ram_ivt.image_len as u32) {
+                Ok(()) => {
+                    good += 1;
+                }
                 Err(e) => {
                     warn!("Failed to authenticate {:?}", e);
                     // return BootError::Authenticate;
+                    bad += 1;
                 }
             }
+        }
+
+        if bad > 0 {
+            self.leds.red.set_high();
+        } else {
+            self.leds.green.set_high();
         }
 
         info!("Booting into application...");
