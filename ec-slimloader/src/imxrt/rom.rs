@@ -1,4 +1,7 @@
-use core::ptr::{null, null_mut};
+use core::{
+    ptr::{null, null_mut},
+    sync::atomic::{fence, Ordering},
+};
 
 use mimxrt685s_pac::interrupt;
 
@@ -18,6 +21,14 @@ struct Version {
 struct SKBoot {
     pub authenticate: unsafe extern "C" fn(start_addr: *const u32, is_verified: *mut u32) -> u32,
     pub hashcrypt_irq_handler: unsafe extern "C" fn() -> (),
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct KbSecurityOptions {
+    selection: u32,
+    storage_config_option: [u32; 2],
+    reserved: u32,
 }
 
 #[repr(C)]
@@ -69,6 +80,7 @@ struct KbOptions {
     buffer_length: u32,
     op: KbOperation,
     settings: KbSettings,
+    security_options: KbSecurityOptions,
 }
 
 #[repr(C)]
@@ -212,7 +224,7 @@ pub fn skboot_authenticate(start: *const u32, max_image_length: u32) -> Result<(
     // 43.9 Secure ROM API page 1282 of RT6xx User manual
 
     let mut session_ref = null_mut();
-    let mut user_buf = [0u32; 1024];
+    let mut user_buf = [0u32; 4096];
 
     let options = KbOptions {
         version: 1,
@@ -227,7 +239,39 @@ pub fn skboot_authenticate(start: *const u32, max_image_length: u32) -> Result<(
                 user_rhk: null(), // TODO perhaps application-specific RHK?
             },
         },
+        security_options: KbSecurityOptions {
+            selection: 0,
+            storage_config_option: [0, 0],
+            reserved: 0,
+        },
     };
+
+    unsafe {
+        let nvic = &*cortex_m::peripheral::NVIC::PTR;
+
+        defmt::info!("ICER: {}", nvic.icer.each_ref().map(|reg| reg.read()));
+        defmt::info!("ICPR: {}", nvic.icpr.each_ref().map(|reg| reg.read()));
+
+        // Disable all configurable interrupts.
+        for clear_enable in &nvic.icer {
+            clear_enable.write(u32::MAX);
+        }
+    }
+
+    for addr in 0x0_0000..=0x1_BFFF {
+        let addr = addr as *mut u32;
+        unsafe { addr.write_volatile(0) };
+    }
+
+    unsafe {
+        let rstctl0 = mimxrt685s_pac::Rstctl0::steal();
+        rstctl0
+            .prstctl0_clr()
+            .write(|w| w.hashcrypt().set_bit().flexspi_otfad().set_bit());
+        cortex_m::asm::delay(10_000_000);
+    }
+
+    fence(Ordering::SeqCst);
 
     let status = unsafe { (api_table().iap_driver.init)(&mut session_ref, &options) };
     if status != KbStatus::Success as u32 {
@@ -235,10 +279,14 @@ pub fn skboot_authenticate(start: *const u32, max_image_length: u32) -> Result<(
         return Err(AuthenticateError::Fail);
     }
 
+    fence(Ordering::SeqCst);
+
     // Placeholder value that will be mutated by skboot_authenticate.
     let mut is_sign_verified: u32 = 0xffffffff;
 
     let result = unsafe { (api_table().skboot.authenticate)(start, &mut is_sign_verified) };
+
+    fence(Ordering::SeqCst);
 
     if cortex_m::peripheral::NVIC::is_enabled(mimxrt685s_pac::Interrupt::HASHCRYPT) {
         warn!("ROM API kept HASHCRYPT unmasked...");

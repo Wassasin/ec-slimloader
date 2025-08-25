@@ -1,4 +1,5 @@
 use core::ops::Range;
+use core::sync::atomic::{fence, Ordering};
 
 use ec_slimloader_descriptors::journal::flash::FlashJournal;
 use ec_slimloader_descriptors::journal::state::Slot;
@@ -39,6 +40,7 @@ static OTFAD: [u8; 256] = [0x00; 256];
 
 pub unsafe fn raw_copy_to_ram(from: *const u32, to: *mut u32, len_words: usize) {
     core::ptr::copy_nonoverlapping(from, to, len_words);
+    fence(Ordering::SeqCst);
 }
 
 type ExternalStorage = AsyncWrapper<FlexSpiNorStorage<'static, 2, 2, 4096>>;
@@ -80,9 +82,9 @@ struct Imxrt {
 
 impl Board for Imxrt {
     async fn init() -> Self {
-        cortex_m::asm::delay(100000);
-
-        let p = embassy_imxrt::init(Default::default());
+        let mut config: embassy_imxrt::config::Config = Default::default();
+        config.clocks.main_clk.freq = 50_000_000.into();
+        let p = embassy_imxrt::init(config);
 
         let ext_flash = match unsafe { FlexSpiNorFlash::with_probed_config(p.FLEXSPI, 2, 2) } {
             Ok(ext_flash) => ext_flash,
@@ -119,7 +121,7 @@ impl Board for Imxrt {
         };
 
         // Copy the image to RAM from flash, and ensure that everything from flash is no longer available.
-        let ram_ivt = {
+        let (ram_ivt, target_data_ptr) = {
             // Fetch image size, which in MBI is located in 0x20 of IVT.
             let image_ptr = descriptor.slot_address as *const u32;
             let slot_size = descriptor.slot_size_bytes as usize;
@@ -152,43 +154,53 @@ impl Board for Imxrt {
                 return BootError::MemoryRegion;
             }
 
+            let data_ram_addr = 0x2000_0000;
+            let target_data_ptr = unsafe { ivt.target_ptr.byte_add(data_ram_addr) };
+
             info!("Starting copy");
             unsafe {
                 raw_copy_to_ram(
                     image_ptr,
-                    ivt.target_ptr,
+                    target_data_ptr,
                     ivt.image_len.div_ceil(core::mem::size_of::<u32>()),
                 );
             }
-
-            unsafe {
-                let mut p = cortex_m::Peripherals::steal();
-                p.SCB.invalidate_icache();
-            }
             info!("Copy done");
 
-            let ram_ivt = unsafe { IVT::read(ivt.target_ptr) };
+            let ram_ivt = unsafe { IVT::read(target_data_ptr) };
             if ivt != ram_ivt {
                 return BootError::ChangeAfterRead;
             }
 
-            ram_ivt
+            (ram_ivt, target_data_ptr)
         };
 
         info!("Starting authenticate");
 
-        // Call the ROM API to ensure that the image is signed and not broken or tampered with.
-        match rom::skboot_authenticate(ram_ivt.target_ptr, ram_ivt.image_len as u32) {
-            Ok(()) => {}
-            Err(e) => {
-                warn!("Failed to authenticate {:?}", e);
-                return BootError::Authenticate;
+        let slice = unsafe { core::slice::from_raw_parts(target_data_ptr as *const u8, ram_ivt.image_len) };
+
+        for _ in 0..50 {
+            let digest = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(slice);
+            info!("CRC32: {:x}", digest);
+
+            // Call the ROM API to ensure that the image is signed and not broken or tampered with.
+            match rom::skboot_authenticate(target_data_ptr, ram_ivt.image_len as u32) {
+                Ok(()) => {}
+                Err(e) => {
+                    warn!("Failed to authenticate {:?}", e);
+                    // return BootError::Authenticate;
+                }
             }
         }
+
         info!("Booting into application...");
 
+        loop {
+            cortex_m::asm::wfe();
+        }
+
         // Boot to application, and we do not return from this function.
-        unsafe { bootload::boot_application(ram_ivt.target_ptr) }
+        // unsafe { bootload::boot_application(ram_ivt.target_ptr) }
     }
 
     fn abort(&mut self) -> ! {
